@@ -1,0 +1,4 @@
+*.sh text eol=lf
+build.sh text eol=lf
+prebuilts/dynamic_installer/META-INF/com/google/android/update-binary text eol=lf
+prebuilts/dynamic_installer/META-INF/com/google/android/updater-script text eol=lf

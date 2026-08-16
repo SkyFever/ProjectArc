@@ -134,6 +134,11 @@ FETCH_FW() {
     mkdir -p "$TARGET_DIR"
 
     LOG_INFO "Downloading firmware $SIMPLE_VERSION..."
+
+    if [[ -z "$DEVICE_IMEI" ]]; then
+        ERROR_EXIT "IMEI is required to download $DEVICE_MODEL ($REGION_CODE). Set it only in the local build environment; never commit it."
+    fi
+
     rm -rf "$TEMP_DIR"
     mkdir -p "$TEMP_DIR"
 

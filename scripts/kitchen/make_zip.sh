@@ -50,6 +50,15 @@ CREATE_FLASHABLE_ZIP()
     mkdir -p "${ZIP_BUILD_DIR}"
 
     cp -a "${PREBUILTS}/dynamic_installer/." "${ZIP_BUILD_DIR}/"
+
+    # Recovery executes update-binary directly and therefore parses its shebang.
+    # The bundled Dynamic Installer may be checked out with CRLF line endings,
+    # which turns /sbin/sh into the invalid interpreter path "/sbin/sh\r" and
+    # makes TWRP abort the ZIP with status 255 before the installer can start.
+    sed -i 's/\r$//' \
+        "${ZIP_BUILD_DIR}/META-INF/com/google/android/update-binary" \
+        "${ZIP_BUILD_DIR}/META-INF/com/google/android/updater-script"
+
     mv "${SUPER_IMAGE_PATH}" "${ZIP_BUILD_DIR}/super.img"
 
     cp "${DIROUT}"/*.img "${ZIP_BUILD_DIR}/" 2>/dev/null || true
@@ -72,6 +81,14 @@ CREATE_FLASHABLE_ZIP()
 
     if [[ -f "${ZIP_BUILD_DIR}/dtbo.img" ]]; then
         EXTRA_BLOCKS+=$'\nui_print "Installing DTBO...";\nupdate_zip dtbo.img $(find_block dtbo);'
+    fi
+
+    if [[ -f "${ZIP_BUILD_DIR}/vbmeta.img" ]]; then
+        EXTRA_BLOCKS+=$'\nui_print "Disabling AVB (vbmeta)...";\nupdate_zip vbmeta.img $(find_block vbmeta);'
+    fi
+
+    if [[ -f "${ZIP_BUILD_DIR}/vbmeta_samsung.img" ]]; then
+        EXTRA_BLOCKS+=$'\nui_print "Disabling AVB (vbmeta_samsung)...";\nupdate_zip vbmeta_samsung.img $(find_block vbmeta_samsung);'
     fi
 
     if [[ -f "${ZIP_BUILD_DIR}/up_param.bin" ]]; then
@@ -107,6 +124,22 @@ CREATE_FLASHABLE_ZIP()
     LOG_END "Flashable zip created at $(basename "${SIGNED_ZIP_PATH}")"
 }
 
+CREATE_DISABLED_VBMETA_IMAGES()
+{
+    local AVBTOOL="${PREBUILTS}/android-tools/avbtool"
+
+    [[ -f "$AVBTOOL" ]] || ERROR_EXIT "avbtool is missing: $AVBTOOL"
+
+    python3 "$AVBTOOL" make_vbmeta_image \
+        --flag 2 \
+        --padding_size 4096 \
+        --output "${DIROUT}/vbmeta.img" \
+        || ERROR_EXIT "Failed to create disabled vbmeta.img"
+
+    cp -f "${DIROUT}/vbmeta.img" "${DIROUT}/vbmeta_samsung.img" \
+        || ERROR_EXIT "Failed to create disabled vbmeta_samsung.img"
+}
+
 
 BUILD_SUPER_IMAGE()
 {
@@ -121,9 +154,13 @@ BUILD_SUPER_IMAGE()
 
     local VALID_PARTITIONS=()
     local CURRENT_TOTAL_SIZE=0
+    local SEEN_PARTITIONS=" "
 
     for PART in $PARTITIONS; do
         local IMG="$DIROUT/${PART}.img"
+
+        [[ "$SEEN_PARTITIONS" == *" $PART "* ]] && continue
+        SEEN_PARTITIONS+="$PART "
 
         if [[ -f "$IMG" ]] && IS_DYNAMIC_PARTITION "$PART"; then
             VALID_PARTITIONS+=("$PART")
@@ -181,6 +218,11 @@ REPACK_ROM()
     else
         # For a release build, create the final flashable ZIP
         BUILD_SUPER_IMAGE
+
+        if [[ "${DEVICE_INCLUDE_DISABLED_VBMETA:-false}" == "true" ]]; then
+            CREATE_DISABLED_VBMETA_IMAGES
+        fi
+
         CREATE_FLASHABLE_ZIP
     fi
 }

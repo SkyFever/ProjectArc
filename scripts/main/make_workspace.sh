@@ -38,6 +38,11 @@ CREATE_WORKSPACE()
     local CONFIG_DIR="$WORKSPACE/config"
     local WORKSPACE_MARKER="$WORKSPACE/.workspace"
 
+    # Feature values generated from the donor and target firmware live only in
+    # the current shell.  Recreate them on incremental builds as well; otherwise
+    # the Astro layer aborts when GET_FEATURE sees an undeclared variable.
+    DEVICE_HAVE_DONOR_SOURCE=${DEVICE_HAVE_DONOR_SOURCE:-false}
+
     local BUILD_DATE BUILD_UTC BUILD_VERSION
     BUILD_DATE=$(GET_PROP "system" "ro.build.date" "main" 2>/dev/null || echo "unknown")
     BUILD_UTC=$(GET_PROP "system" "ro.build.date.utc" "main" 2>/dev/null || echo "0")
@@ -52,6 +57,10 @@ CREATE_WORKSPACE()
             LOG_INFO "Workspace is already set. Skipping rebuild."
             WORKSPACE="$WORKSPACE"
             CONFIG_DIR="$CONFIG_DIR"
+
+            if ! GET_FEATURE DEVICE_HAVE_DONOR_SOURCE; then
+                GENERATE_CONFIG
+            fi
             return 0
         fi
     fi
@@ -73,10 +82,20 @@ CREATE_WORKSPACE()
             "${OEM_PARTITIONS[@]}"
     fi
 
-    LINK_PARTITIONS "$SOURCE_FW" "$WORKSPACE" "$CONFIG_DIR" \
+    local CSC_FIRMWARE_DIR="$SOURCE_FW"
+    if GET_FEATURE DEVICE_USE_STOCK_CSC && [[ -n "$STOCK_MODEL" ]]; then
+        CSC_FIRMWARE_DIR="$STOCK_FW"
+        LOG_INFO "Using target stock CSC partitions"
+    fi
+
+    LINK_PARTITIONS "$CSC_FIRMWARE_DIR" "$WORKSPACE" "$CONFIG_DIR" \
         "${CSC_PARTITIONS[@]}"
 
     chown -R "$SUDO_USER:$SUDO_USER" "$WORKSPACE" 2>/dev/null
+
+    if [[ "${DEVICE_USE_STOCK_SEPOLICY_MAPPING:-false}" == "true" ]]; then
+        SYNC_STOCK_SEPOLICY_MAPPINGS
+    fi
 
     cat > "$WORKSPACE_MARKER" <<EOF
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
@@ -88,10 +107,9 @@ BUILD_DATE=$BUILD_DATE
 BUILD_DATE_UTC=$BUILD_UTC
 EOF
 
-    DEVICE_HAVE_DONOR_SOURCE=${DEVICE_HAVE_DONOR_SOURCE:-false}
-        if ! GET_FEATURE DEVICE_HAVE_DONOR_SOURCE; then
-            GENERATE_CONFIG
-        fi
+    if ! GET_FEATURE DEVICE_HAVE_DONOR_SOURCE; then
+        GENERATE_CONFIG
+    fi
 
     LOG_INFO "Checking VNDK version..."
 
@@ -102,27 +120,50 @@ EOF
 
     local VINTF_MANIFEST_PATH="$SYSTEM_EXT_PATH/etc/vintf/manifest.xml"
     local CURRENT_VNDK_VERSION=""
+    local CURRENT_VNDK_VERSIONS=""
     local VNDK_PATCH_REQUIRED=false
 
     if [[ -f "$VINTF_MANIFEST_PATH" ]]; then
-        CURRENT_VNDK_VERSION=$(grep -A2 -i "<vendor-ndk>" "$VINTF_MANIFEST_PATH" \
-            | grep -oP '<version>\K[0-9]+' | head -1)
+        CURRENT_VNDK_VERSIONS=$(grep -A2 -i "<vendor-ndk>" "$VINTF_MANIFEST_PATH" \
+            | grep -oP '<version>\K[0-9]+' | sort -un | tr '\n' ' ')
+        CURRENT_VNDK_VERSION="${CURRENT_VNDK_VERSIONS%% *}"
     fi
 
-    if [[ "$CURRENT_VNDK_VERSION" != "$DEVICE_VNDK_VERSION" ]]; then
+    if [[ " $CURRENT_VNDK_VERSIONS " != *" $DEVICE_VNDK_VERSION "* ]]; then
         VNDK_PATCH_REQUIRED=true
     else
-        LOG_INFO "VNDK matches ($CURRENT_VNDK_VERSION). Skipping VNDK patch."
+        LOG_INFO "Required VNDK is already present ($CURRENT_VNDK_VERSIONS). Skipping VNDK patch."
     fi
 
     if $VNDK_PATCH_REQUIRED; then
-        LOG_WARN "VNDK mismatch or missing (Current: ${CURRENT_VNDK_VERSION:-None}, Target: $DEVICE_VNDK_VERSION). Patching..."
+        LOG_WARN "Required VNDK missing (Current: ${CURRENT_VNDK_VERSIONS:-None}, Target: $DEVICE_VNDK_VERSION). Patching..."
 
         local VNDK_APEX_NAME="com.android.vndk.v${DEVICE_VNDK_VERSION}.apex"
         local VNDK_SOURCE_PATH="$BLOBS_DIR/vndk/v${DEVICE_VNDK_VERSION}/${VNDK_APEX_NAME}"
         local VNDK_TARGET_PATH="apex/${VNDK_APEX_NAME}"
 
-        find "$SYSTEM_EXT_PATH/apex" -name "com.android.vndk.v*.apex" -delete 2>/dev/null
+        if [[ "${DEVICE_USE_STOCK_VNDK_APEX:-false}" == "true" ]]; then
+            local STOCK_SYSTEM_EXT_PATH
+            STOCK_SYSTEM_EXT_PATH="$(GET_PARTITION_PATH system_ext stock 2>/dev/null)" \
+                || ERROR_EXIT "Cannot resolve stock system_ext for VNDK"
+            VNDK_SOURCE_PATH="$STOCK_SYSTEM_EXT_PATH/apex/$VNDK_APEX_NAME"
+        fi
+
+        if [[ ! -f "$VNDK_SOURCE_PATH" ]]; then
+            local VNDK_PARTS=("${VNDK_SOURCE_PATH}".part*)
+            if [[ -f "${VNDK_PARTS[0]}" ]]; then
+                LOG_INFO "Joining split VNDK v${DEVICE_VNDK_VERSION} APEX..."
+                cat "${VNDK_PARTS[@]}" > "$VNDK_SOURCE_PATH" \
+                    || ERROR_EXIT "Failed to join split VNDK APEX"
+            fi
+        fi
+
+        [[ -f "$VNDK_SOURCE_PATH" ]] \
+            || ERROR_EXIT "VNDK source is missing: $VNDK_SOURCE_PATH"
+
+        if [[ "${DEVICE_KEEP_DONOR_VNDK_APEX:-false}" != "true" ]]; then
+            find "$SYSTEM_EXT_PATH/apex" -name "com.android.vndk.v*.apex" -delete 2>/dev/null
+        fi
 
         ADD "system_ext" "$VNDK_SOURCE_PATH" "$VNDK_TARGET_PATH" "VNDK v${DEVICE_VNDK_VERSION} APEX" \
             || ERROR_EXIT "Failed to set correct vndk version"
@@ -130,8 +171,8 @@ EOF
         if [[ ! -f "$VINTF_MANIFEST_PATH" ]]; then
             LOG_WARN "Manifest file not found at $VINTF_MANIFEST_PATH. Cannot patch XML."
         else
-            if [[ -z "$CURRENT_VNDK_VERSION" ]]; then
-                LOG_INFO "Manifest missing <vendor-ndk> tag. Adding it..."
+            if [[ -z "$CURRENT_VNDK_VERSION" || "${DEVICE_KEEP_DONOR_VNDK_APEX:-false}" == "true" ]]; then
+                LOG_INFO "Adding VNDK $DEVICE_VNDK_VERSION to framework manifest..."
 
                 sed -i "/<\/manifest>/i \\
     <vendor-ndk>\\
@@ -247,6 +288,37 @@ if ! find "$OBJECTIVE" -type f -name "camera-feature.xml" | grep -q .; then
 fi
 
     LOG_END "Build environment ready at $WORKSPACE"
+}
+
+SYNC_STOCK_SEPOLICY_MAPPINGS()
+{
+    local CIL_VERSION
+    CIL_VERSION="$(head -n 1 "$STOCK_FW/vendor/etc/selinux/plat_sepolicy_vers.txt" 2>/dev/null)"
+    [[ -n "$CIL_VERSION" ]] \
+        || ERROR_EXIT "Cannot determine stock vendor SELinux mapping version"
+
+    local PARTITION_NAME SOURCE_PATH TARGET_PATH MAPPING_FILE
+
+    for PARTITION_NAME in system system_ext product; do
+        SOURCE_PATH="$(GET_PARTITION_PATH "$PARTITION_NAME" stock 2>/dev/null)" || continue
+        TARGET_PATH="$(GET_PARTITION_PATH "$PARTITION_NAME" 2>/dev/null)" || continue
+
+        mkdir -p "$TARGET_PATH/etc/selinux/mapping" || \
+            ERROR_EXIT "Cannot create $PARTITION_NAME SELinux mapping directory"
+
+        for MAPPING_FILE in \
+            "${CIL_VERSION}.cil" \
+            "${CIL_VERSION}.compat.cil"; do
+            [[ -f "$SOURCE_PATH/etc/selinux/mapping/$MAPPING_FILE" ]] || continue
+
+            cp -af \
+                "$SOURCE_PATH/etc/selinux/mapping/$MAPPING_FILE" \
+                "$TARGET_PATH/etc/selinux/mapping/$MAPPING_FILE" \
+                || ERROR_EXIT "Cannot import stock $PARTITION_NAME SELinux $MAPPING_FILE"
+        done
+    done
+
+    LOG_INFO "Imported stock SELinux ${CIL_VERSION} mappings for split-policy compilation"
 }
 
 

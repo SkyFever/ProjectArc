@@ -13,7 +13,7 @@ FF_IF_DIFF "stock" "SETTINGS_CONFIG_BRAND_NAME"
 FF_IF_DIFF "stock" "SYSTEM_CONFIG_SIOP_POLICY_FILENAME"
 
 BPROP "system" "ro.product.system.model" "$DEVICE_MODEL"
-BPROP "system" "ro.product.product.model" "$DEVICE_MODEL"
+BPROP "product" "ro.product.product.model" "$DEVICE_MODEL"
 
 ASTRO_CODENAME="$(GET_PROP "system" "ro.product.system.name" "stock")"
 

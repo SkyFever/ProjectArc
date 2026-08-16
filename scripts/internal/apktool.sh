@@ -488,7 +488,10 @@ _APKTOOL_PATCH()
             for SCRIPT in "$P_DIR"/*.sh; do
                 if [[ -f "$SCRIPT" ]]; then
                     LOG_INFO "Executing $(basename "$SCRIPT")"
-                    (cd "$WORK_DIR" && . "$SCRIPT") || ERROR_EXIT "Script failed: $(basename "$SCRIPT")"
+                    (cd "$WORK_DIR" && . "$SCRIPT") || {
+                        rm -rf "$WORK_DIR"
+                        ERROR_EXIT "Script failed: $(basename "$SCRIPT")"
+                    }
                 fi
             done
         done

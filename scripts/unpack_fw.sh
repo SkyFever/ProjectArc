@@ -198,14 +198,27 @@ UNPACK_PARTITION()
 
 
     case "$FS_TYPE" in
-        "ext4") mount -o ro "$IMAGE_PATH" "$MNT" ;;
+        "ext4") mount -t ext4 -o ro,loop "$IMAGE_PATH" "$MNT" ;;
         "erofs") SILENT "$PREBUILTS/erofs-utils/fuse.erofs" "$IMAGE_PATH" "$MNT" ;;
-        "f2fs") [[ ! IS_WSL ]] && mount -o ro "$IMAGE_PATH" "$MNT" ;;
+        "f2fs")
+            if ! grep -qw f2fs /proc/filesystems; then
+                modprobe f2fs 2>/dev/null || true
+            fi
+            grep -qw f2fs /proc/filesystems \
+                || { ERROR_EXIT "F2FS kernel support is unavailable"; return 1; }
+            mount -t f2fs -o ro,loop "$IMAGE_PATH" "$MNT"
+            ;;
         *)      ERROR_EXIT "Unsupported filesystem: $FS_TYPE"; return 1 ;;
     esac
 
+    mountpoint -q "$MNT" \
+        || { ERROR_EXIT "Failed to mount $PART_NAME [$FS_TYPE]"; return 1; }
 
-    cp -a -T "$MNT" "$DEST_DIR"
+    if ! cp -a -T "$MNT" "$DEST_DIR"; then
+        rm -rf "$DEST_DIR"
+        ERROR_EXIT "Failed to copy files from $PART_NAME [$FS_TYPE]"
+        return 1
+    fi
 
     # Generate Linux perms & SELinux contexts
 	#https://source.android.com/docs/security/features/selinux
@@ -218,7 +231,22 @@ UNPACK_PARTITION()
 
 	# Generate file_contexts: SELinux security contexts
     # Format: <path> <selinux_context>
-    find "$MNT" | xargs -I {} sh -c 'echo "{} $(getfattr -n security.selinux --only-values -h --absolute-names "{}")"' sh > "$FILE_CONT"
+    local CONTEXT_READ_FAILED=0
+    local ENTRY CONTEXT_VALUE
+    while IFS= read -r -d '' ENTRY; do
+        if ! CONTEXT_VALUE=$(getfattr -n security.selinux --only-values -h --absolute-names "$ENTRY" 2>/dev/null); then
+            CONTEXT_READ_FAILED=1
+            break
+        fi
+        printf '%s %s\n' "$ENTRY" "$CONTEXT_VALUE"
+    done < <(find "$MNT" -print0) > "$FILE_CONT"
+
+    if (( CONTEXT_READ_FAILED )); then
+        rm -rf "$DEST_DIR"
+        rm -f "$FS_CONFIG" "$FILE_CONT"
+        ERROR_EXIT "Failed to read SELinux contexts from $PART_NAME [$FS_TYPE]"
+        return 1
+    fi
 
     sort -o "$FS_CONFIG" "$FS_CONFIG"
     sort -o "$FILE_CONT" "$FILE_CONT"
@@ -237,8 +265,94 @@ UNPACK_PARTITION()
 
     # Escape Regex metacharacters
     sed -i -E 's/([][()+*.^$?\\|])/\\\1/g' "$FILE_CONT"
-    sed -i "/^PARTITIONS=/s/\"$/ $PART_NAME\"/" "$UNPACK_CONF"
+    local CURRENT_PARTITIONS
+    CURRENT_PARTITIONS=$(source "$UNPACK_CONF" && echo "$PARTITIONS")
+    if [[ " $CURRENT_PARTITIONS " != *" $PART_NAME "* ]]; then
+        sed -i "/^PARTITIONS=/s/\"$/ $PART_NAME\"/" "$UNPACK_CONF"
+    fi
     # ]
+}
+
+GET_LOCAL_FIRMWARE_DIR()
+{
+    case "$1" in
+        main)  echo "${SOURCE_LOCAL_FIRMWARE_DIR:-}" ;;
+        stock) echo "${STOCK_LOCAL_FIRMWARE_DIR:-}" ;;
+        extra) echo "${EXTRA_LOCAL_FIRMWARE_DIR:-}" ;;
+        *)     return 1 ;;
+    esac
+}
+
+EXTRACT_LOCAL_FIRMWARE()
+{
+    local MODEL_NAME="$1"
+    local FW_TYPE="$2"
+    local SOURCE_DIR="$3"
+    local WORK_DIR="${WORKDIR}/${MODEL_NAME}"
+    local CONF_FILE="${WORK_DIR}/unpack.conf"
+    local MARKER_FILE="${WORK_DIR}/.extraction_complete"
+
+    [[ -d "$SOURCE_DIR" ]] \
+        || { ERROR_EXIT "Local firmware directory missing: $SOURCE_DIR"; return 1; }
+
+    local IMAGE_STATE
+    IMAGE_STATE=$(
+        find "$SOURCE_DIR" -maxdepth 1 -type f -name "*.img" \
+            -printf '%f:%s:%T@\n' | sort | sha256sum | awk '{print $1}'
+    )
+
+    if [[ -f "$CONF_FILE" && -f "$MARKER_FILE" ]]; then
+        local CACHED_METADATA
+        CACHED_METADATA=$(source "$CONF_FILE" && echo "$METADATA")
+        if [[ "$CACHED_METADATA" == "$IMAGE_STATE" ]]; then
+            LOG_INFO "$MODEL_NAME local firmware already extracted."
+            return 0
+        fi
+    fi
+
+    LOG_INFO "Unpacking local $MODEL_NAME firmware from $SOURCE_DIR..."
+    rm -rf "${WORK_DIR:?}"
+    mkdir -p "$WORK_DIR"
+
+    local SUPER_SIZE="0"
+    local METADATA_SIZE="${DEVICE_SUPER_METADATA_SIZE:-65536}"
+    local METADATA_SLOTS="${DEVICE_SUPER_METADATA_SLOTS:-2}"
+    local GROUP_NAME="${DEVICE_SUPER_GROUP_NAME:-qti_dynamic_partitions}"
+    local GROUP_SIZE="0"
+
+    if [[ "$FW_TYPE" == "stock" ]]; then
+        SUPER_SIZE="${DEVICE_SUPER_PARTITION_SIZE:-0}"
+        GROUP_SIZE="${DEVICE_SUPER_GROUP_BASIC_SIZE:-0}"
+    fi
+
+    cat > "$CONF_FILE" <<EOF
+METADATA="$IMAGE_STATE"
+SUPER_SIZE="$SUPER_SIZE"
+METADATA_SIZE="$METADATA_SIZE"
+METADATA_SLOTS="$METADATA_SLOTS"
+GROUP_NAME="$GROUP_NAME"
+GROUP_SIZE="$GROUP_SIZE"
+EXTRACT_DATE="$(date '+%Y-%m-%d %H:%M:%S')"
+PARTITIONS=""
+EOF
+
+    local FOUND_PART_COUNT=0
+    local PART
+    # Local firmware folders can also provide the target CSC images.  Without
+    # this, DEVICE_USE_STOCK_CSC is silently ineffective for local builds and
+    # the workspace contains no optics/prism carrier data.
+    for PART in "${TARGET_PARTITIONS[@]}" "${CSC_SUB_PARTITIONS[@]}"; do
+        local IMAGE_PATH="${SOURCE_DIR}/${PART}.img"
+        [[ -f "$IMAGE_PATH" ]] || continue
+        UNPACK_PARTITION "$IMAGE_PATH" "$MODEL_NAME" || return 1
+        ((FOUND_PART_COUNT++))
+    done
+
+    (( FOUND_PART_COUNT > 0 )) \
+        || { ERROR_EXIT "No supported partition images found in $SOURCE_DIR"; return 1; }
+
+    touch "$MARKER_FILE"
+    LOG_END "Unpacked local $MODEL_NAME firmware ($FOUND_PART_COUNT partitions)."
 }
 
 # https://source.android.com/docs/core/ota/sparse_images
@@ -274,17 +388,21 @@ EXTRACT_ROM() {
         IFS=":" read -r m c type <<< "$entry"
         [[ -z "$m" || -z "$c" ]] && continue
 
-        DOWNLOAD_FW "$type" || ERROR_EXIT "Firmware download failed"
-
         local fw_id="${m}_${c}"
         if [[ "$processed" =~ "$fw_id" ]]; then
             continue
         fi
 
+        local LOCAL_FIRMWARE_DIR
+        LOCAL_FIRMWARE_DIR=$(GET_LOCAL_FIRMWARE_DIR "$type")
 
-        if [[ "$type" == "main" && "$BETA_ASSERT" == "1" ]]; then
+        if [[ -n "$LOCAL_FIRMWARE_DIR" ]]; then
+            EXTRACT_LOCAL_FIRMWARE "$m" "$type" "$LOCAL_FIRMWARE_DIR" || return 1
+        elif [[ "$type" == "main" && "$BETA_ASSERT" == "1" ]]; then
+            DOWNLOAD_FW "$type" || ERROR_EXIT "Firmware download failed"
             PATCH_BETA_FW "$m" "$c" || return 1
         else
+            DOWNLOAD_FW "$type" || ERROR_EXIT "Firmware download failed"
             EXTRACT_FIRMWARE "$m" "$c" "$type" || return 1
         fi
 

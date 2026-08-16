@@ -89,11 +89,11 @@ SETUP_DEVICE_ENV()
     echo -e "    → Debug Mode:           ${DEBUG_BUILD}"
     echo -e ""
 
-    if ! IS_GITHUB_ACTIONS; then
+    if ! IS_GITHUB_ACTIONS && ! ${ASSUME_YES:-false}; then
         echo -e "Imported config. Press ${COLOR_GREEN}ENTER${COLOR_RESET} to proceed with the build, or ${COLOR_RED}Ctrl+C${COLOR_RESET} to abort."
         read -r USER_CONFIRMATION
     else
-        LOG_INFO "CI environment detected, proceeding with build automatically."
+        LOG_INFO "Non-interactive build enabled, proceeding automatically."
     fi
 
     INIT_BUILD_ENV
@@ -139,7 +139,17 @@ CHECK_ALL_DEPENDENCIES()
     local PACKAGE_CONFIG_STRING PACKAGE_DISPLAY_NAME DEBIAN_PACKAGE_NAME ARCH_PACKAGE_NAME RESOLVED_PACKAGE_NAME IS_CRITICAL_PACKAGE
 
     if [[ "$DETECTED_DISTRO_TYPE" == "debian" ]]; then
-        sudo apt-get update &>/dev/null
+        local NEEDS_APT_UPDATE=false
+        for PACKAGE_CONFIG_STRING in "${DEPENDENCY_CONFIG[@]}"; do
+            IFS='|' read -r DEBIAN_PACKAGE_NAME _ _ _ <<< "$PACKAGE_CONFIG_STRING"
+            if ! dpkg -s "$DEBIAN_PACKAGE_NAME" &>/dev/null; then
+                NEEDS_APT_UPDATE=true
+                break
+            fi
+        done
+        if $NEEDS_APT_UPDATE; then
+            sudo apt-get update &>/dev/null
+        fi
     fi
 
     for PACKAGE_CONFIG_STRING in "${DEPENDENCY_CONFIG[@]}"; do

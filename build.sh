@@ -27,6 +27,8 @@ BETA_OTA_URL=""
 export BETA_ASSERT BETA_OTA_URL
 
 DEBUG_BUILD=false
+BOOTSTRAP_BUILD=false
+ASSUME_YES=false
 
 PREBUILTS=$ASTROROM/prebuilts
 
@@ -45,7 +47,7 @@ fi
 
 WORKDIR="$ASTROROM/firmware/unpacked"
 WORKSPACE="$ASTROROM/workspace"
-DIROUT="$ASTROROM/out"
+DIROUT="${ASTROROM_OUT_DIR:-$ASTROROM/out}"
 
 SOURCE_FW="${WORKDIR}/${MODEL}"
 STOCK_FW="${WORKDIR}/${STOCK_MODEL}"
@@ -127,7 +129,7 @@ EXEC_SCRIPT()
 
 _BUILD_ROM()
 {
-    rm -rf "$ASTROROM/out" && mkdir -p "$ASTROROM/out"
+    rm -rf "$DIROUT" && mkdir -p "$DIROUT"
 
     CHECK_ALL_DEPENDENCIES
     chmod +x -R "$PREBUILTS"
@@ -153,6 +155,11 @@ _BUILD_ROM()
     export OBJECTIVE
 
     source "$OBJECTIVE/$DEVICE.sh" || ERROR_EXIT "Device config load failed"
+
+    if $BOOTSTRAP_BUILD; then
+        LOG_INFO "Bootstrap profile enabled: rebuilding a clean, minimally patched workspace"
+        rm -rf "$WORKSPACE"
+    fi
 
     # Github Ubuntu runners have 72GB storage only. So skip extra firmwares
     if  IS_GITHUB_ACTIONS; then
@@ -180,19 +187,39 @@ _BUILD_ROM()
         mkdir -p "$(dirname "$MARKER_FILE")"
         sed -i "/^$META_TAG /d" "$MARKER_FILE" 2>/dev/null || true
         echo "$META_TAG $DEVICE" >> "$MARKER_FILE"
+    else
+        # The workspace marker persists between invocations, but the firmware
+        # paths and auto-detected DEVICE_/SOURCE_ values are shell variables.
+        # Restore them before executing the full Astro layer on an incremental
+        # build.
+        SOURCE_FW="${WORKDIR}/${MODEL}"
+        STOCK_FW="${WORKDIR}/${STOCK_MODEL}"
+        EXTRA_FW="${WORKDIR}/${EXTRA_MODEL}"
+        DEVICE_HAVE_DONOR_SOURCE=${DEVICE_HAVE_DONOR_SOURCE:-false}
+
+        if ! GET_FEATURE DEVICE_HAVE_DONOR_SOURCE; then
+            GENERATE_CONFIG
+        fi
     fi
 
     local LAYERS=()
 
-    if [[ -n "$PLATFORM" ]]; then
-        PLATFORM_DIR="$ASTROROM/platform/$PLATFORM"
-        LAYERS+=("$PLATFORM_DIR")
+    if $BOOTSTRAP_BUILD; then
+        if [[ -n "$PLATFORM" ]]; then
+            PLATFORM_DIR="$ASTROROM/platform/$PLATFORM"
+            LAYERS+=("$PLATFORM_DIR/bootstrap")
+        fi
+        LAYERS+=("$OBJECTIVE/bootstrap")
+    else
+        if [[ -n "$PLATFORM" ]]; then
+            PLATFORM_DIR="$ASTROROM/platform/$PLATFORM"
+            LAYERS+=("$PLATFORM_DIR")
+        fi
+        LAYERS+=(
+            "$PROJECT_DIR"
+            "$OBJECTIVE"
+        )
     fi
-
-    LAYERS+=(
-        "$PROJECT_DIR"
-        "$OBJECTIVE"
-    )
 
     for LAYER in "${LAYERS[@]}"; do
         [[ ! -d "$LAYER" ]] && continue
@@ -200,6 +227,14 @@ _BUILD_ROM()
         # Execute scripts
         while IFS= read -r -d '' SH; do
             [[ "$SH" == *"$DEVICE.sh" ]] && continue
+
+            # Native One UI 8 donors such as q7q already contain the complete
+            # current-generation feature stack. Re-importing pa3q/S25 files
+            # over that stack creates mixed package/resource generations.
+            if [[ "${DEVICE_SKIP_TWENTYFIVE_LAYER:-false}" == "true" &&
+                  "$SH" == "$PROJECT_DIR/twentyfive/"* ]]; then
+                continue
+            fi
 
 
             local MOD_NAME MOD_AUTHOR
@@ -276,7 +311,11 @@ _BUILD_ROM()
         done < <(find "$LAYER" -type d -name "*.img" -print0)
     done
 
-    _APKTOOL_PATCH || ERROR_EXIT "APK/JAR patching failed"
+    if ! $BOOTSTRAP_BUILD; then
+        _APKTOOL_PATCH || ERROR_EXIT "APK/JAR patching failed"
+    else
+        LOG_INFO "Bootstrap profile: skipping global APK/JAR feature patches"
+    fi
     REPACK_ROM "$FILESYSTEM" || ERROR_EXIT "Repack failed"
 
     LOG_END "Build completed for $DEVICE"
@@ -309,6 +348,9 @@ CLEAN OPTIONS:
 
 OPTIONS:
   -d, --debug               Build a debug rom for testing.
+      --bootstrap           Skip feature mods and apply only boot-critical
+                            platform/device compatibility patches.
+  -y, --yes                 Proceed without the interactive confirmation.
 
 AVAILABLE OBJECTIVES:
   ${AVAILABLE_DEVICES[*]:-None found in $OBJECTIVES_DIR}
@@ -316,6 +358,7 @@ AVAILABLE OBJECTIVES:
 
 EXAMPLES:
   sudo ./build.sh build x1q
+  sudo -E ./build.sh --debug --bootstrap --build x1q
   sudo ./build.sh b
   sudo ./build.sh clean --workspace
   sudo ./build.sh clean --all
@@ -366,6 +409,14 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --debug|-d)
             DEBUG_BUILD=true
+            shift
+            ;;
+        --bootstrap)
+            BOOTSTRAP_BUILD=true
+            shift
+            ;;
+        --yes|-y)
+            ASSUME_YES=true
             shift
             ;;
         --build|-b)
