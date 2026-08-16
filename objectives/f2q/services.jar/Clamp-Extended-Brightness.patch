@@ -1,0 +1,11 @@
+--- a/smali/com/android/server/display/DisplayPowerController.smali
++++ b/smali/com/android/server/display/DisplayPowerController.smali
+@@ -1200,7 +1200,7 @@
+ 
+     move-object v11, v9
+ 
+-    sget v9, Lcom/android/server/display/brightness/BrightnessUtils;->sScreenExtendedBrightnessRangeMaximum:F
++    const/high16 v9, 0x3f800000    # 1.0f; safe until A16-to-A11 display HAL translation exists
+ 
+     iput v9, v0, Lcom/android/server/display/DisplayPowerController;->mScreenExtendedBrightnessRangeMaximum:F
+ 

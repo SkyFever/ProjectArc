@@ -1,0 +1,8 @@
+# Fold2 KGSL nodes are root:root 0644 although system_server already has the
+# vendor_sysfs_kgsl SELinux write permission. Grant only the system UID DAC
+# access before system_server starts; no daemon, shell loop or su is used.
+on boot
+    chown system system /sys/class/kgsl/kgsl-3d0/max_pwrlevel
+    chmod 0664 /sys/class/kgsl/kgsl-3d0/max_pwrlevel
+    chown system system /sys/class/kgsl/kgsl-3d0/devfreq/max_freq
+    chmod 0664 /sys/class/kgsl/kgsl-3d0/devfreq/max_freq

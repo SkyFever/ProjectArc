@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Fold2 Android 13 framework-res values. Android 16 otherwise falls
+         back to Fold4-era generic 36dp/24dp radii. -->
+    <dimen name="rounded_corner_radius">0.0dip</dimen>
+    <dimen name="rounded_corner_radius_top">20.0dip</dimen>
+    <dimen name="rounded_corner_radius_bottom">20.0dip</dimen>
+    <dimen name="rounded_corner_radius_for_letterbox">5.0mm</dimen>
+    <dimen name="rounded_corner_radius_for_multiwindow">12.0dip</dimen>
+    <dimen name="secondary_rounded_corner_radius">0.0px</dimen>
+    <dimen name="secondary_rounded_corner_radius_top">0.0px</dimen>
+    <dimen name="secondary_rounded_corner_radius_bottom">0.0px</dimen>
+</resources>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Fold2's panel reaches its real high-brightness range through the
+         Samsung display/HBM stack.  Keep the framework ceiling untouched and
+         let Extra Brightness request a conservative 15% DisplaySolution
+         multiplier instead of the Fold7 donor's inert 1.00 value. -->
+    <string-array name="config_Extra_Brightness_Display_Solution_Brightness_Value">
+        <item>1.15</item>
+    </string-array>
+</resources>

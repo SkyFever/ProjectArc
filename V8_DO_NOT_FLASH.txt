@@ -1,0 +1,7 @@
+REJECTED IMAGE
+
+Do not flash f2q_q7q_light865_hbm115_v8_gnssfold0_final_direct/super.img.
+Its floating_feature.xml lost the security.selinux xattr during the build,
+causing repeated SystemUI IndicatorGarden crashes and a RescueParty reboot.
+
+Use f2q_q7q_light865_hbm115_v9_gnssfold0_direct/super.img instead.

@@ -1,0 +1,5 @@
+# Fold2 bootloaders do not expose androidboot.activatedid, while newer
+# Samsung CIDManager expects it. Derive it from the device's own sales code so
+# one image remains valid for KOO, LUC, and other Fold2 CSC variants.
+on early-init
+    setprop ro.boot.activatedid ${ro.boot.sales_code}
