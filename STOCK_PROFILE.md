@@ -24,10 +24,13 @@ AstroROM additions are intentionally excluded from this branch:
 - Google Photos Pixel device spoofing;
 - PUI theme overlays;
 - Via Browser preload;
-- global secure-screen and screenshot-detection bypasses;
-- Sysscope "Official" display spoofing;
 - AstroROM CSC/e-label and build-display branding; and
 - the global 0.85x WindowManager animation modification.
+
+The Samsung secure-screen bypass and Sysscope status compatibility patches are
+retained. Sysscope uses the localized `sysscope_normal` resource, so the status
+follows the current system language instead of falling back to a hard-coded
+English `Official` string.
 
 Additional common fixes in this branch cover:
 

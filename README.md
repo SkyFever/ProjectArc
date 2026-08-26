@@ -37,11 +37,13 @@ To create a universal, hassle-free ROM modification solution that will auto patc
 - Adaptive color tone
 - Outdoor mode
 - Custom font support 
+- Localized Official status in device information
 - Heavily debloated
 - Bluetooth library patched
 - Samsung encryption removed
 - Fixed Knox apps (Secure Folder,Secure WiFi,Private Share,Health etc)
 - Fixed samsung wearables 
+- Disabled secure screenshot detection
 - Fixed SmartView
 - Enables some hidden device features
 - And many more!
