@@ -15,6 +15,20 @@ stock VNDK APEX files, retaining a donor VNDK, and skipping the `twentyfive`
 feature layer when the donor already provides the same-generation framework.
 These options are disabled unless an objective explicitly enables them.
 
+The default stock layer also preserves the target firmware's CSC/OMC and
+Samsung Device Care configuration. It does not import another device's carrier
+configuration or globally force regional CSC features. The following optional
+AstroROM additions are intentionally excluded from this branch:
+
+- Smart Manager China, AppLock, and Firewall payloads;
+- Google Photos Pixel device spoofing;
+- PUI theme overlays;
+- Via Browser preload;
+- global secure-screen and screenshot-detection bypasses;
+- Sysscope "Official" display spoofing;
+- AstroROM CSC/e-label and build-display branding; and
+- the global 0.85x WindowManager animation modification.
+
 Additional common fixes in this branch cover:
 
 - incremental workspace regeneration;

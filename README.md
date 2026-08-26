@@ -37,29 +37,20 @@ To create a universal, hassle-free ROM modification solution that will auto patc
 - Adaptive color tone
 - Outdoor mode
 - Custom font support 
-- Official status in device information
 - Heavily debloated
 - Bluetooth library patched
-- Smart Manager China
 - Samsung encryption removed
 - Fixed Knox apps (Secure Folder,Secure WiFi,Private Share,Health etc)
 - Fixed samsung wearables 
-- Inbuilt PUI theme 
-- Disabled secure screenshot detection
 - Fixed SmartView
-- Unlimited google photos storage with original quality 
 - Enables some hidden device features
 - And many more!
 
 ### CSC Features
-- Network speed Meter
-- AppLock support
-- Data usage display on notification shade
-- Firewall
-- App blocker and permission manager
-- AltZlife
-- Native call recording
-- And many more 
+- Target firmware CSC features are preserved without importing or globally
+  forcing features from another device or region.
+- Region-specific features remain available only when supplied by the target
+  CSC or explicitly enabled by a device objective.
 
 
 ### Extras*
